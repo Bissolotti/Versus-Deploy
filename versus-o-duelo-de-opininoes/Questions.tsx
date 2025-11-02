@@ -136,3 +136,58 @@ const Questions: React.FC<QuestionsProps> = ({ onGoHome }) => {
         setUserVotes(updatedUserVotes);
     }
 }
+    // avançar para a próxima pergunta
+    setJustVoted(null);
+    const nextIndex = currentQuestionIndex + 1;
+
+    if (nextIndex < questions.length) {
+        setCurrentQuestionIndex(nextIndex);
+        setViewMode('voting');
+    } else {
+        setIsFinished(true);
+    }
+};
+
+// ============================================================================
+// RENDER
+// ============================================================================
+if (isLoading) return <div>{t.loading}</div>;
+if (error) return <div>{error}</div>;
+if (!questions) return <div>{t.noQuestions}</div>;
+
+if (isFinished) {
+    return (
+        <div>
+            <h2>{t.finished}</h2>
+            <button onClick={onGoHome}>{t.goHome}</button>
+        </div>
+    );
+}
+
+const currentQuestion = questions[currentQuestionIndex];
+const hasVoted = userVotes[currentQuestion.id] === 'yes' || userVotes[currentQuestion.id] === 'no';
+
+return (
+    <div>
+        <h2>{currentQuestion.text}</h2>
+
+        {!hasVoted && (
+            <div>
+                <button onClick={() => handleVote('yes')}>{t.yes}</button>
+                <button onClick={() => handleVote('no')}>{t.no}</button>
+                <button onClick={handleNextQuestion}>{t.skip}</button>
+            </div>
+        )}
+
+        {hasVoted && (
+            <div>
+                <p>{t.explanationTitle}</p>
+                <p>{currentQuestion.explanation}</p>
+                <button onClick={handleNextQuestion}>{t.next}</button>
+            </div>
+        )}
+    </div>
+);
+};
+
+export default Questions;
