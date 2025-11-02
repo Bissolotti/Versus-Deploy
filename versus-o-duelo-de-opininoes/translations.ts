@@ -100,6 +100,11 @@ export const translations = {
         en: 'Understand',
         es: 'Entiende'
     },
+    viewResults: {
+        pt: 'Ver Resultados',
+        en: 'View Results',
+        es: 'Ver Resultados'
+    },
     
     // Curiosities.tsx
     curiositiesTitle: {
