@@ -128,9 +128,11 @@ const Questions: React.FC<QuestionsProps> = ({ onGoHome }) => {
     };
     
     const handleNextQuestion = () => {
-        if (!questions) return;
-        const currentQuestion = questions[currentQuestionIndex];
-        
-        if (!userVotes[currentQuestion.id]) {
-            const updatedUserVotes = { ...userVotes, [currentQuestion.id]: 'skipped' as const };
-            setUserVotes(updatedUser
+    if (!questions) return;
+    const currentQuestion = questions[currentQuestionIndex];
+    
+    if (!userVotes[currentQuestion.id]) {
+        const updatedUserVotes = { ...userVotes, [currentQuestion.id]: 'skipped' as const };
+        setUserVotes(updatedUserVotes);
+    }
+}
