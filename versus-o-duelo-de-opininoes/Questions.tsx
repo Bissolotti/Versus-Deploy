@@ -1,79 +1,232 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLanguage } from './LanguageContext';
+import { questionsContent as allQuestionsContent } from './translations';
 
-const questions = [
-    { 
-        id: 1, 
-        text: 'Trump vai atacar a Venezuela?',
-        explanation: 'A relação entre os EUA, sob uma possível nova administração Trump, e a Venezuela de Nicolás Maduro é um tópico de intensa especulação. Durante seu mandato, Trump adotou uma política de "pressão máxima", com sanções econômicas severas e não descartou publicamente a "opção militar". Embora uma intervenção militar direta seja considerada de alto risco e custo, analistas debatem se uma nova presidência adotaria uma postura ainda mais agressiva ou se concentraria em outras prioridades de política externa.'
+// ============================================================================
+// ESTRUTURA DOS DADOS
+// ============================================================================
+interface Question {
+    id: number;
+    text: string;
+    explanation: string;
+    yes: number;
+    no: number;
+}
+
+// ============================================================================
+// SIMULAÇÃO DO BACKEND
+// ============================================================================
+const DB_VOTES_KEY = 'supabase_mock_votes';
+
+const api = {
+    fetchQuestions: async (lang: 'pt' | 'en' | 'es'): Promise<Question[]> => {
+        await new Promise(resolve => setTimeout(resolve, 1500)); 
+
+        const storedVotes = JSON.parse(localStorage.getItem(DB_VOTES_KEY) || '{}');
+        const content = allQuestionsContent[lang];
+        
+        const fullQuestions = content.map(q => ({
+            ...q,
+            yes: storedVotes[q.id]?.yes || 0,
+            no: storedVotes[q.id]?.no || 0,
+        }));
+        
+        return fullQuestions;
     },
-    { 
-        id: 2, 
-        text: 'Bolsonaro é elegível para 2026?',
-        explanation: 'O ex-presidente Jair Bolsonaro foi declarado inelegível por 8 anos pelo Tribunal Superior Eleitoral (TSE) em junho de 2023. A condenação, por abuso de poder político e uso indevido dos meios de comunicação, o impede de concorrer nas eleições de 2026 e 2030. A defesa de Bolsonaro está recorrendo da decisão em instâncias superiores, como o Supremo Tribunal Federal (STF), mas até que uma eventual reversão ocorra, ele permanece inelegível.'
-    },
-    { 
-        id: 3, 
-        text: 'Barroso deve sofrer sanções Magnitski?',
-        explanation: 'A Lei Magnitsky é uma legislação dos EUA que permite ao governo americano impor sanções a indivíduos estrangeiros por violações de direitos humanos ou atos significativos de corrupção. O debate sobre sua aplicação ao Ministro Luís Roberto Barroso, do STF, surge a partir de alegações de ativismo judicial e de suspeitas sobre a condução do processo eleitoral de 2022. A aplicação da lei é uma prerrogativa do poder executivo dos EUA e, historicamente, baseia-se em investigações que apontem evidências de violações graves, levando em conta tanto os critérios da legislação quanto as implicações diplomáticas.'
-    },
-];
+    submitVote: async (questionId: number, vote: 'yes' | 'no'): Promise<void> => {
+        await new Promise(resolve => setTimeout(resolve, 500)); 
+        const storedVotes = JSON.parse(localStorage.getItem(DB_VOTES_KEY) || '{}');
+        if (!storedVotes[questionId]) {
+            storedVotes[questionId] = { yes: 0, no: 0 };
+        }
+        storedVotes[questionId][vote]++;
+        localStorage.setItem(DB_VOTES_KEY, JSON.stringify(storedVotes));
+    }
+};
 
-// --- SIMULAÇÃO DE UM BACKEND / BANCO DE DADOS ---
-// Esta estrutura de dados fica fora do componente React,
-// então ela não é recriada a cada renderização.
-// Ela persistirá enquanto a página não for recarregada.
-// Isso simula como um servidor manteria os dados.
-const voteDatabase = questions.reduce((acc, q) => {
-    acc[q.id] = { 
-        yes: Math.floor(Math.random() * 100) + 1, // Começa com dados aleatórios
-        no: Math.floor(Math.random() * 100) + 1,
-        votedByThisUser: false // Controla se o usuário já votou nesta pergunta
-    };
-    return acc;
-}, {} as Record<number, { yes: number, no: number, votedByThisUser: boolean }>);
-// --- FIM DA SIMULAÇÃO ---
+// ============================================================================
+// RASTREADOR DE VOTOS DO USUÁRIO
+// ============================================================================
+const USER_VOTES_KEY = 'versus_user_votes';
+type UserVotes = Record<number, 'yes' | 'no' | 'skipped'>;
 
+const userVoteTracker = {
+    load: (): UserVotes => JSON.parse(localStorage.getItem(USER_VOTES_KEY) || '{}'),
+    save: (votes: UserVotes) => localStorage.setItem(USER_VOTES_KEY, JSON.stringify(votes)),
+};
 
+// ============================================================================
+// COMPONENTE REACT
+// ============================================================================
 interface QuestionsProps {
     onGoHome: () => void;
 }
 
 const Questions: React.FC<QuestionsProps> = ({ onGoHome }) => {
+    const { language, t } = useLanguage();
+    const [questions, setQuestions] = useState<Question[] | null>(null);
+    const [userVotes, setUserVotes] = useState<UserVotes>({});
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-    // O 'votes' agora é apenas uma "cópia" visual do nosso banco de dados simulado.
-    // Usamos um truque com um contador para forçar a atualização da tela.
-    const [_, forceUpdate] = React.useState(0);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     
     const [viewMode, setViewMode] = useState<'voting' | 'explanation'>('voting');
+    const [isFinished, setIsFinished] = useState(false);
+    const [justVoted, setJustVoted] = useState<'yes' | 'no' | null>(null);
 
-    const currentQuestion = questions[currentQuestionIndex];
-    // Sempre lê os dados mais recentes do nosso "banco de dados"
-    const currentVotesData = voteDatabase[currentQuestion.id];
-    
-    const totalVotes = currentVotesData.yes + currentVotesData.no;
-    const yesPercentage = totalVotes > 0 ? ((currentVotesData.yes / totalVotes) * 100).toFixed(0) : 50;
-    const noPercentage = totalVotes > 0 ? ((currentVotesData.no / totalVotes) * 100).toFixed(0) : 50;
-    
-    // Verifica se o usuário já votou nesta pergunta específica
-    const hasVotedOnCurrent = currentVotesData.votedByThisUser;
+    useEffect(() => {
+        const loadData = async () => {
+            try {
+                setIsLoading(true);
+                setError(null);
+                const fetchedQuestions = await api.fetchQuestions(language);
+                const loadedUserVotes = userVoteTracker.load();
+                setQuestions(fetchedQuestions);
+                setUserVotes(loadedUserVotes);
+            } catch (err: any) {
+                setError(err.message || 'Ocorreu um erro desconhecido.');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        loadData();
+    }, [language]);
 
-    const handleVote = (option: 'yes' | 'no') => {
-        if (hasVotedOnCurrent) return;
+    const handleVote = async (option: 'yes' | 'no') => {
+        if (!questions) return;
+        const currentQuestion = questions[currentQuestionIndex];
+        if (userVotes[currentQuestion.id]) return;
 
-        // Atualiza nosso "banco de dados" diretamente
-        voteDatabase[currentQuestion.id][option]++;
-        voteDatabase[currentQuestion.id].votedByThisUser = true;
+        setJustVoted(option);
 
-        // Força o componente a renderizar novamente para mostrar os novos dados
-        forceUpdate(c => c + 1);
+        const updatedQuestions = questions.map((q, index) => {
+            if (index === currentQuestionIndex) {
+                return { ...q, [option]: q[option] + 1 };
+            }
+            return q;
+        });
+        setQuestions(updatedQuestions);
+
+        const updatedUserVotes = { ...userVotes, [currentQuestion.id]: option };
+        setUserVotes(updatedUserVotes);
+        userVoteTracker.save(updatedUserVotes);
+
+        try {
+            await api.submitVote(currentQuestion.id, option);
+        } catch (err) {
+            console.error("Falha ao submeter o voto:", err);
+        }
     };
-
+    
     const handleNextQuestion = () => {
+        if (!questions) return;
+        const currentQuestion = questions[currentQuestionIndex];
+        
+        if (!userVotes[currentQuestion.id]) {
+            const updatedUserVotes = { ...userVotes, [currentQuestion.id]: 'skipped' as const };
+            setUserVotes(updatedUserVotes);
+            userVoteTracker.save(updatedUserVotes);
+        }
+
+        setJustVoted(null);
         setViewMode('voting');
-        setCurrentQuestionIndex((prevIndex) => (prevIndex + 1) % questions.length);
-        // Não precisamos mais resetar o status de votação aqui,
-        // pois ele é lido diretamente do nosso "banco de dados" simulado.
+
+        if (currentQuestionIndex < questions.length - 1) {
+            setCurrentQuestionIndex(prev => prev + 1);
+        } else {
+            setIsFinished(true);
+        }
     };
+
+    const handlePreviousQuestion = () => {
+        if (currentQuestionIndex > 0) {
+            setJustVoted(null);
+            setViewMode('voting');
+            setCurrentQuestionIndex(prev => prev - 1);
+        }
+    };
+
+    if (isLoading) {
+        return (
+            <div className="flex flex-col items-center justify-center h-screen text-white">
+                 <svg className="w-24 h-24 animate-spin text-[#A385E8]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p className="mt-4 text-xl font-bold tracking-wider">{t('loadingDuels')}</p>
+            </div>
+        );
+    }
+
+    if (error) {
+         return (
+            <div className="flex flex-col items-center justify-center h-screen text-white text-center p-4">
+                <h2 className="text-3xl font-bold text-[#E83D84] mb-4">{t('errorTitle')}</h2>
+                <p className="text-lg mb-8 max-w-md">{error}</p>
+                <button
+                    onClick={() => window.location.reload()}
+                    className="px-8 py-3 font-bold text-lg text-white border-2 border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8] hover:text-[#0C0C2D] transform hover:scale-105">
+                    {t('errorButton')}
+                </button>
+            </div>
+        );
+    }
+
+    if (isFinished || !questions) {
+        return (
+            <div className="relative flex flex-col items-center justify-center w-full min-h-screen p-4 py-16 animate-fade-in">
+                <div className="w-full max-w-3xl p-8 bg-[#1a1a3d] rounded-2xl shadow-2xl border border-[#A385E8]/20">
+                    <h2 className="text-3xl md:text-4xl font-bold text-white text-center mt-2 mb-8">
+                        {t('summaryTitle')}
+                    </h2>
+                    
+                    <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-4">
+                        {questions?.map(q => {
+                            const total = q.yes + q.no;
+                            const yesP = total > 0 ? ((q.yes / total) * 100).toFixed(0) : "50";
+                            const noP = total > 0 ? ((q.no / total) * 100).toFixed(0) : "50";
+                            
+                            const userVote = userVotes[q.id];
+                            const userVoteText = userVote === 'yes' ? t('voteYes') : userVote === 'no' ? t('voteNo') : t('voteSkipped');
+                            const userVoteColor = userVote === 'yes' ? 'text-[#3DE8E8]' : userVote === 'no' ? 'text-[#E83D84]' : 'text-gray-400';
+
+                            return (
+                                <div key={q.id} className="p-4 bg-[#0C0C2D]/50 rounded-lg border border-white/10">
+                                    <p className="text-lg font-semibold text-white mb-3">{q.text}</p>
+                                    <div className="flex justify-between items-center text-sm">
+                                        <p className="font-bold">{t('summaryYourAnswer')} <span className={userVoteColor}>{userVoteText}</span></p>
+                                        <div className="flex items-center space-x-3 font-mono">
+                                             <span className="text-[#3DE8E8]">{yesP}% {t('voteYes')}</span>
+                                             <span>/</span>
+                                             <span className="text-[#E83D84]">{noP}% {t('voteNo')}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    
+                    <div className="text-center mt-10">
+                        <button
+                            onClick={onGoHome}
+                            className="px-8 py-3 font-bold text-lg text-white border-2 border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8] hover:text-[#0C0C2D] hover:shadow-[0_0_25px_#A385E8] transform hover:scale-105">
+                            {t('buttonGoHome')}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
+    const currentQuestion = questions[currentQuestionIndex];
+    const hasVotedOnCurrent = !!userVotes[currentQuestion.id] && userVotes[currentQuestion.id] !== 'skipped';
+    const showResults = hasVotedOnCurrent || justVoted;
+
+    const totalVotes = currentQuestion.yes + currentQuestion.no;
+    const yesPercentage = totalVotes > 0 ? ((currentQuestion.yes / totalVotes) * 100).toFixed(0) : "50";
+    const noPercentage = totalVotes > 0 ? ((currentQuestion.no / totalVotes) * 100).toFixed(0) : "50";
+    const isLastQuestion = currentQuestionIndex === questions.length - 1;
+    const progressPercentage = ((currentQuestionIndex + 1) / questions.length) * 100;
 
     if (viewMode === 'explanation') {
         return (
@@ -82,8 +235,19 @@ const Questions: React.FC<QuestionsProps> = ({ onGoHome }) => {
                     onClick={onGoHome}
                     className="absolute top-6 left-6 px-4 py-2 font-bold text-sm text-[#A385E8] border border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8] hover:text-[#0C0C2D] hover:shadow-[0_0_15px_#A385E8] z-20"
                     aria-label="Voltar para a página inicial">
-                    &larr; Voltar para Home
+                    &larr; {t('buttonGoHome')}
                 </button>
+                 <div className="w-full max-w-xs mx-auto mb-8">
+                    <p className="text-center text-sm font-bold text-[#A385E8] mb-2 tracking-wider">
+                        {t('questionProgress', { current: currentQuestionIndex + 1, total: questions.length })}
+                    </p>
+                    <div className="w-full bg-white/10 rounded-full h-2.5 border border-white/20">
+                        <div
+                            className="bg-[#A385E8] h-2.5 rounded-full transition-all duration-500 ease-out"
+                            style={{ width: `${progressPercentage}%`, boxShadow: '0 0 10px #A385E8' }}
+                        ></div>
+                    </div>
+                </div>
                 <div className="w-full max-w-2xl p-8 bg-[#1a1a3d] rounded-2xl shadow-2xl border border-[#A385E8]/20 animate-fade-in">
                     <h2 className="text-2xl md:text-3xl font-bold text-center text-white mb-6 tracking-wide">
                         {currentQuestion.text}
@@ -95,7 +259,7 @@ const Questions: React.FC<QuestionsProps> = ({ onGoHome }) => {
                         <button
                             onClick={() => setViewMode('voting')}
                             className="px-8 py-3 font-bold text-lg text-white border-2 border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8] hover:text-[#0C0C2D] hover:shadow-[0_0_25px_#A385E8] transform hover:scale-105">
-                            Voltar
+                            {t('buttonBack')}
                         </button>
                     </div>
                 </div>
@@ -109,62 +273,80 @@ const Questions: React.FC<QuestionsProps> = ({ onGoHome }) => {
                 onClick={onGoHome}
                 className="absolute top-6 left-6 px-4 py-2 font-bold text-sm text-[#A385E8] border border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8] hover:text-[#0C0C2D] hover:shadow-[0_0_15px_#A385E8] z-20"
                 aria-label="Voltar para a página inicial">
-                &larr; Voltar para Home
+                &larr; {t('buttonGoHome')}
             </button>
+
+            <div className="w-full max-w-xs mx-auto mb-8">
+                <p className="text-center text-sm font-bold text-[#A385E8] mb-2 tracking-wider">
+                     {t('questionProgress', { current: currentQuestionIndex + 1, total: questions.length })}
+                </p>
+                <div className="w-full bg-white/10 rounded-full h-2.5 border border-white/20">
+                    <div
+                        className="bg-[#A385E8] h-2.5 rounded-full transition-all duration-500 ease-out"
+                        style={{ width: `${progressPercentage}%`, boxShadow: '0 0 10px #A385E8' }}
+                    ></div>
+                </div>
+            </div>
+
             <div className="w-full max-w-2xl p-8 bg-[#1a1a3d] rounded-2xl shadow-2xl border border-[#A385E8]/20">
                 <h2 className="text-2xl md:text-3xl font-bold text-center text-white mb-8 tracking-wide">
                     {currentQuestion.text}
                 </h2>
 
                 <div className="flex justify-between items-center space-x-4 mb-4">
-                    <button
+                     <button
                         onClick={() => handleVote('no')}
                         disabled={hasVotedOnCurrent}
-                        className="w-full px-6 py-3 font-bold text-xl text-white bg-[#E83D84] rounded-lg transition-all duration-300 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 hover:shadow-[0_0_20px_#E83D84]">
-                        NÃO
+                        className={`w-full px-6 py-3 font-bold text-xl text-white bg-[#E83D84] rounded-lg transition-all duration-300 ease-in-out transform disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 ${justVoted === 'no' ? 'animate-pulse-vote-no' : hasVotedOnCurrent ? '' : 'hover:scale-105 hover:shadow-[0_0_20px_#E83D84]'}`}>
+                        {t('voteNo')}
                     </button>
                     <button
                         onClick={() => handleVote('yes')}
                         disabled={hasVotedOnCurrent}
-                        className="w-full px-6 py-3 font-bold text-xl text-white bg-[#3DE8E8] rounded-lg transition-all duration-300 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 hover:shadow-[0_0_20px_#3DE8E8]">
-                        SIM
+                        className={`w-full px-6 py-3 font-bold text-xl text-white bg-[#3DE8E8] rounded-lg transition-all duration-300 ease-in-out transform disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 ${justVoted === 'yes' ? 'animate-pulse-vote-yes' : hasVotedOnCurrent ? '' : 'hover:scale-105 hover:shadow-[0_0_20px_#3DE8E8]'}`}>
+                        {t('voteYes')}
                     </button>
                 </div>
 
-                {/* Seção de Resultados - Agora é sempre visível, mas a barra só aparece após o voto */}
-                <div className="mt-8">
-                    <div className={`relative w-full h-10 bg-[#0C0C2D] rounded-full overflow-hidden flex border-2 border-[#A385E8]/50 transition-opacity duration-500 ${hasVotedOnCurrent ? 'opacity-100' : 'opacity-0'}`}>
-                        <div
-                            className="h-full bg-[#E83D84] flex items-center justify-start pl-4 text-white font-bold transition-all duration-700 ease-out"
-                            style={{ width: `${noPercentage}%` }}>
-                            {noPercentage}%
+                {showResults && (
+                    <div className="mt-8 animate-fade-in">
+                        <div className="relative w-full h-10 bg-[#0C0C2D] rounded-full overflow-hidden flex border-2 border-[#A385E8]/50">
+                            <div
+                                className="h-full bg-[#E83D84] flex items-center justify-start pl-4 text-white font-bold transition-all duration-700 ease-out"
+                                style={{ width: `${noPercentage}%` }}>
+                                {parseInt(noPercentage) > 10 && `${noPercentage}%`}
+                            </div>
+                            <div
+                                className="h-full bg-[#3DE8E8] flex items-center justify-end pr-4 text-[#0C0C2D] font-bold transition-all duration-700 ease-out"
+                                style={{ width: `${yesPercentage}%` }}>
+                                {parseInt(yesPercentage) > 10 && `${yesPercentage}%`}
+                            </div>
                         </div>
-                        <div
-                            className="h-full bg-[#3DE8E8] flex items-center justify-end pr-4 text-[#0C0C2D] font-bold transition-all duration-700 ease-out"
-                            style={{ width: `${yesPercentage}%` }}>
-                            {yesPercentage}%
-                        </div>
-                    </div>
-                </div>
-                
-                {/* Botão de Próxima Pergunta */}
-                {hasVotedOnCurrent && (
-                    <div className="mt-8 flex justify-center">
-                        <button
-                            onClick={handleNextQuestion}
-                            className="px-8 py-3 font-bold text-lg text-white border-2 border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8] hover:text-[#0C0C2D] hover:shadow-[0_0_25px_#A385E8] transform hover:scale-105 animate-fade-in">
-                            Próxima Pergunta
-                        </button>
                     </div>
                 )}
+                
+                <div className="mt-8 flex justify-center items-center space-x-4">
+                    {currentQuestionIndex > 0 && (
+                         <button
+                            onClick={handlePreviousQuestion}
+                            className="px-5 py-2 font-bold text-sm text-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8]/20 transform hover:scale-105"
+                            aria-label="Voltar para a pergunta anterior">
+                            &larr; {t('buttonBack')}
+                        </button>
+                    )}
+                    <button
+                        onClick={handleNextQuestion}
+                        className="px-8 py-3 font-bold text-lg text-white border-2 border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8] hover:text-[#0C0C2D] hover:shadow-[0_0_25px_#A385E8] transform hover:scale-105">
+                        {isLastQuestion ? t('buttonFinish') : t('buttonNext')}
+                    </button>
+                </div>
             </div>
             
-            {/* Botão de Contexto */}
             <button
                 onClick={() => setViewMode('explanation')}
-                className="mt-6 px-5 py-2 font-bold text-sm text-[#A385E8] border border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8]/20 transform hover:scale-105"
+                className="mt-8 px-5 py-2 font-bold text-sm text-[#A385E8] border border-[#A385E8] rounded-lg transition-all duration-300 ease-in-out hover:bg-[#A385E8]/20 transform hover:scale-105"
                 aria-label="Entenda o contexto da pergunta">
-                Entenda
+                {t('buttonUnderstand')}
             </button>
         </div>
     );
